@@ -24,7 +24,7 @@ function trafic_limiter_canPass($ip)
     $tfilename='./data/trafic_limiter.php';
     if (!is_file($tfilename))
     {
-        file_put_contents($tfilename,"<?php\n\$GLOBALS['trafic_limiter']=array();\n?>");
+        file_put_contents($tfilename,"<?php\n\$GLOBALS['trafic_limiter']=array();\n?>", LOCK_EX);
         chmod($tfilename,0705);
     }
     require $tfilename;
@@ -38,6 +38,19 @@ function trafic_limiter_canPass($ip)
     file_put_contents($tfilename, "<?php\n\$GLOBALS['trafic_limiter']=".var_export($tl,true).";\n?>", LOCK_EX);
     return true;
 }
+
+// Constant time string comparison.
+// (Used to deter time attacks on hmac checking. See section 2.7 of https://defuse.ca/audits/zerobin.htm)
+function slow_equals($a, $b)
+{
+    $diff = strlen($a) ^ strlen($b);
+    for($i = 0; $i < strlen($a) && $i < strlen($b); $i++)
+    {
+        $diff |= ord($a[$i]) ^ ord($b[$i]);
+    }
+    return $diff === 0;
+}
+
 
 /* Convert paste id to storage path.
    The idea is to creates subdirectories in order to limit the number of files per directory.
@@ -140,7 +153,7 @@ if (!empty($_POST['data'])) // Create new paste/comment
     if (!is_dir('data'))
     {
         mkdir('data',0705);
-        file_put_contents('data/.htaccess',"Allow from none\nDeny from all\n");
+        file_put_contents('data/.htaccess',"Allow from none\nDeny from all\n", LOCK_EX);
     }
 
     // Make sure last paste from the IP address was more than 10 seconds ago.
@@ -266,7 +279,7 @@ if (!empty($_POST['data'])) // Create new paste/comment
             exit;
         }
 
-        file_put_contents($discdir.$filename,json_encode($storage));
+        file_put_contents($discdir.$filename,json_encode($storage), LOCK_EX);
         echo json_encode(array('status'=>0,'id'=>$dataid)); // 0 = no error
         exit;
     }
@@ -280,7 +293,7 @@ if (!empty($_POST['data'])) // Create new paste/comment
             exit;
         }
         // New paste
-        file_put_contents($storagedir.$dataid,json_encode($storage));
+        file_put_contents($storagedir.$dataid,json_encode($storage), LOCK_EX);
 
         // Generate the "delete" token.
         // The token is the hmac of the pasteid signed with the server salt.
@@ -308,8 +321,12 @@ function processPasteDelete($pasteid,$deletetoken)
             return array('','Paste does not exist, has expired or has been deleted.','');
         }
     }
+    else
+    {
+        return array('','Invalid data','');
+    }
 
-    if ($deletetoken != hash_hmac('sha1', $pasteid , getServerSalt())) // Make sure token is valid.
+    if (!slow_equals($deletetoken, hash_hmac('sha1', $pasteid , getServerSalt()))) // Make sure token is valid.
     {
         return array('','Wrong deletion token. Paste was not deleted.','');
     }
